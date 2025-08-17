@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime
+import re
 
 from playwright.async_api import async_playwright, Browser, Page, BrowserContext
 import logging
@@ -103,107 +104,135 @@ class CommentParser:
                     await i.click()
                 print("Загрузка ответов комментариев завершена")
 
-                comment_data = []
+                reviews_data = []
+                comments_data = []
+                media_data = []
 
                 # Основной блок комментариев
-                comment_blocks = await self.page.query_selector_all('.ow-opinion.ow-opinions__item')
+                reviews_blocks = await self.page.query_selector_all('.ow-opinion.ow-opinions__item')
 
-                for block in comment_blocks:
+                for block in reviews_blocks:
                     if block:
-                        dct1 = {}
+                        reviews_dict = {}
 
                         # Достоинства
                         plus = await block.query_selector('.ow-opinion__text:has-text("Достоинства")')
                         if plus:
                             plus_text = await plus.text_content()
-                            dct1['plus'] = plus_text[11:]
+                            reviews_dict['plus'] = plus_text[11:]
                         else:
-                            dct1['plus'] = None
+                            reviews_dict['plus'] = None
 
                         # Недостатки
                         minus = await block.query_selector('.ow-opinion__text:has-text("Недостатки")')
                         if minus:
                             minus_text = await minus.text_content()
-                            dct1['minus'] = minus_text[10:]
+                            reviews_dict['minus'] = minus_text[10:]
                         else:
-                            dct1['minus'] = None
+                            reviews_dict['minus'] = None
 
                         # Комментарий
-                        comment = await block.query_selector('.ow-opinion__text:has-text("Комментарий")')
-                        if comment:
-                            comment_text = await comment.text_content()
-                            dct1['comment'] = comment_text[11:]
+                        review = await block.query_selector('.ow-opinion__text:has-text("Комментарий")')
+                        if review:
+                            review_text = await review.text_content()
+                            reviews_dict['review'] = review_text[11:]
                         else:
-                            dct1['comment'] = None
+                            reviews_dict['review'] = None
 
                         # Рейтинг
                         rating = await block.query_selector_all(".star-rating__star[data-state='selected']")
-                        dct1['rating'] = len(rating) / 2
+                        reviews_dict['rating'] = len(rating) / 2
 
                         # Реальный покупатель
                         user_id_real = await block.query_selector('.profile-info__real')
                         if user_id_real:
-                            dct1['user_id_real'] = True
+                            reviews_dict['user_id_real'] = True
                         else:
-                            dct1['user_id_real'] = False
+                            reviews_dict['user_id_real'] = False
 
                         # Дата отзыва
                         date = await block.query_selector('.ow-opinion__date')
                         if date:
                             date_text = await date.text_content()
-                            dct1['date'] = datetime.strptime(date_text, "%d.%m.%Y")
+                            reviews_dict['date'] = datetime.strptime(date_text, "%d.%m.%Y")
 
                         # UUID Отзыва
                         opinion_id = await block.get_attribute('data-opinion-id')
                         if opinion_id:
-                            dct1['id'] = opinion_id
+                            reviews_dict['id'] = opinion_id
 
                         # UUID Пользователя
                         user_id = await block.get_attribute('data-user-id')
                         if user_id:
-                            dct1['user_id'] = user_id
+                            reviews_dict['user_id'] = user_id
 
                         is_top = await block.query_selector('.ow-opinion__most-popular')
                         if is_top:
-                            dct1['is_top'] = True
+                            reviews_dict['is_top'] = True
                         else:
-                            dct1['is_top'] = False
+                            reviews_dict['is_top'] = False
 
-                        comment_data.append(dct1)
+                        reviews_data.append(reviews_dict)
 
-                        # dct1['plus'] = await block.query_selector('.ow-opinion__text:has-text("Достоинства")')
-                        # dct1['minus'] = await block.query_selector('.ow-opinion__text:has-text("Недостатки")')
-                        # dct1['comment'] = await block.query_selector('.ow-opinion__text:has-text("Комментарий")')
+                        comments = await block.query_selector_all('.comment')
+                        for comment in comments:
+                            if comment:
+                                comments_dict = {}
+                                comment_id = await comment.get_attribute('data-id')
+                                if comment_id:
+                                    comments_dict['comment_id'] = comment_id
+                                comments_dict['review_id'] = opinion_id
+                                user_id = await comment.query_selector('.profile-info__name')
+                                if user_id:
+                                    user_id = await user_id.get_attribute('data-user-popover-url')
+                                if user_id:
+                                    match = re.search(r'userId=([a-f0-9-]+)', user_id)
+                                    if match:
+                                        user_id = match.group(1)
+                                    else:
+                                        raise Exception('Не совпал user_id по регулярному выражению')
 
-                        # dct1['rating'] = await block.query_selector_all(".star-rating__star[data-state='selected']")
-                        # comment_data.append(dct1)
+                                comments_dict['user_id'] = user_id
+                                if user_id == '0ebcb82d-1907-4359-b365-ddd7af5fe906':
+                                    comments_dict['is_admin'] = True
+                                else:
+                                    comments_dict['is_admin'] = False
+                                text = await comment.query_selector('.comment__message.message')
+                                if text:
+                                    text = await text.text_content()
+                                    comments_dict['text'] = text.strip()
+                                date = await comment.query_selector('.comment__date.time-info')
+                                if date:
+                                    date = await date.text_content()
+                                    comments_dict['date'] = date.strip()
+                                comments_data.append(comments_dict)
 
-                print(comment_data)
+                        media_objects = await block.query_selector('.ow-photos-and-videos')
+                        if media_objects:
+                            img_elements = await media_objects.query_selector_all('img')
+                            video_elements = await media_objects.query_selector_all('video')
+                            if img_elements:
+                                for img in img_elements:
+                                    media_dict = {}
+                                    url = await img.get_attribute('src')
+                                    if url:
+                                        media_dict['media_url'] = url
+                                        media_dict['review_id'] = opinion_id
+                                        media_data.append(media_dict)
+                            if video_elements:
+                                for video in video_elements:
+                                    media_dict = {}
+                                    url = await video.get_attribute('src')
+                                    if url:
+                                        media_dict['media_url'] = url
+                                        media_dict['review_id'] = opinion_id
+                                        media_data.append(media_dict)
 
-                # Блок достоинства
-                # comment_pluses_blocks = [await comment_block.query_selector('.ow-opinion__text:has-text("Достоинства")')
-                #                          for comment_block in comment_blocks if comment_block]
 
-                # # Блок недостатки
-                # comment_minuses_blocks = [await comment_block.query_selector('.ow-opinion__text:has-text("Недостатки")')
-                #                           for comment_block in comment_blocks if comment_block]
-                #
-                # # Блок комментарии
-                # comment_minuses_blocks = [await comment_block.query_selector('.ow-opinion__text:has-text("Комментарий")')
-                #                           for comment_block in comment_blocks if comment_block]
-                #
-                # stars = [await star.query_selector_all(".star-rating__star[data-state='selected']")
-                #          for star in comment_blocks if star]
-                # count = 0
-                # for i in stars:
-                #     count += 1
-                #     print(f'Рейтинг: {len(i)/2}')
-                # print(f'Обработано {count} отзывов')
-                # # Блок достоинства текст
-                # comment_pluses_text = [await block.query_selector('.ow-opinion__text-desc')
-                #                        for block in comment_pluses_blocks if block]
-                # for i in comment_pluses_text:
-                # print(await i.text_content())
+
+                # print(reviews_data)
+                # print(comments_data)
+                print(media_data)
 
                 await asyncio.Future()
             except Exception as e:
